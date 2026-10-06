@@ -1,6 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
+const { createClient } = require('@supabase/supabase-js');
 const { crawl } = require('../crawler');
 const { sendReport } = require('../mailer');
 const { registerSite, unregisterSite, scanNow, listJobs } = require('../scheduler');
@@ -16,13 +18,74 @@ const db = require('../db');
 
 const router = express.Router();
 
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,       // 1 minute
+  max: 60,                   // 60 requests per IP per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many requests, slow down.' },
+});
+
+const scanLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,                    // 5 scan requests per IP per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Scan rate limit exceeded.' },
+});
+
+router.use(globalLimiter);
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 function ok(res, data, status = 200) {
   return res.status(status).json({ ok: true, ...data });
 }
 function err(res, message, status = 400) {
   return res.status(status).json({ ok: false, error: message });
 }
-function requireAuth(req, res, next) {
+
+// ── Auth middleware ───────────────────────────────────────────────────────────
+// Verifies the Supabase JWT from Authorization: Bearer <token>
+// Puts the verified user on req.user — never trust req.body.userId
+
+function getSupabaseAdmin() {
+  return createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY,
+    { auth: { persistSession: false } }
+  );
+}
+
+async function requireUser(req, res, next) {
+  const token = req.headers['authorization']?.replace('Bearer ', '').trim();
+  if (!token) return err(res, 'Unauthorized', 401);
+
+  try {
+    const supabase = getSupabaseAdmin();
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data?.user) return err(res, 'Unauthorized', 401);
+
+    // Attach the full DB user row (has plan, subscription_status, stripe_customer_id)
+    const dbUser = await db.getUserByEmail(data.user.email);
+    req.user = {
+      id: data.user.id,
+      email: data.user.email,
+      plan: dbUser?.plan || null,
+      subscription_status: dbUser?.subscription_status || null,
+      stripe_customer_id: dbUser?.stripe_customer_id || null,
+    };
+    next();
+  } catch (e) {
+    console.error('requireUser error:', e.message);
+    return err(res, 'Unauthorized', 401);
+  }
+}
+
+// Internal-only middleware (scheduler/webhook calls, not user-facing)
+function requireInternalKey(req, res, next) {
   const key = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
   if (!key || key !== process.env.INTERNAL_API_KEY) return err(res, 'Unauthorized', 401);
   next();
@@ -41,10 +104,14 @@ router.get('/plans', (_req, res) => {
 });
 
 // ── Billing ───────────────────────────────────────────────────────────────────
+
+// Checkout is intentionally open — user may not be logged in yet when they hit pay.
+// We pass their email + userId from the frontend after Supabase signup.
 router.post('/billing/checkout', async (req, res) => {
   try {
     const { email, name, plan, userId } = req.body;
     if (!email || !plan) return err(res, 'email and plan are required');
+    if (!PLANS[plan]) return err(res, `Invalid plan: ${plan}`);
     const customerId = await getOrCreateCustomer({ email, name });
     const appUrl = process.env.APP_URL || 'http://localhost:3000';
     const { sessionId, url } = await createCheckoutSession({
@@ -60,12 +127,14 @@ router.post('/billing/checkout', async (req, res) => {
   }
 });
 
-router.post('/billing/portal', requireAuth, async (req, res) => {
+router.post('/billing/portal', requireUser, async (req, res) => {
   try {
-    const { customerId } = req.body;
-    if (!customerId) return err(res, 'customerId is required');
+    if (!req.user.stripe_customer_id) return err(res, 'No billing account found');
     const appUrl = process.env.APP_URL || 'http://localhost:3000';
-    const url = await createPortalSession({ customerId, returnUrl: `${appUrl}/dashboard` });
+    const url = await createPortalSession({
+      customerId: req.user.stripe_customer_id,
+      returnUrl: `${appUrl}/dashboard`,
+    });
     ok(res, { url });
   } catch (e) {
     err(res, e.message);
@@ -114,19 +183,43 @@ router.post('/billing/webhook', express.raw({ type: 'application/json' }), async
 });
 
 // ── Sites ─────────────────────────────────────────────────────────────────────
-router.post('/sites', requireAuth, async (req, res) => {
+
+router.post('/sites', requireUser, async (req, res) => {
   try {
-    const { userId, url, name, schedule, maxPages, checkExternal } = req.body;
-    if (!userId || !url || !name) return err(res, 'userId, url, and name are required');
+    // Must have an active paid subscription
+    if (req.user.subscription_status !== 'active') {
+      return err(res, 'Active subscription required', 403);
+    }
+
+    const { url, name, schedule, checkExternal } = req.body;
+    if (!url || !name) return err(res, 'url and name are required');
     try { new URL(url); } catch { return err(res, 'Invalid URL'); }
 
-    const site = await db.createSite({ userId, url, name, schedule, maxPages, checkExternal });
+    // Enforce plan site limit server-side
+    const plan = PLANS[req.user.plan];
+    if (!plan) return err(res, 'Unknown plan', 403);
+
+    const existingSites = await db.getSitesByUser(req.user.id);
+    if (existingSites.length >= plan.maxSites) {
+      return err(res, `Site limit reached for your plan (max ${plan.maxSites})`, 403);
+    }
+
+    // Cap maxPages at plan limit — never trust client value
+    const maxPages = Math.min(
+      parseInt(req.body.maxPages) || plan.maxPages,
+      plan.maxPages
+    );
+
+    const site = await db.createSite({
+      userId: req.user.id,
+      url, name, schedule, maxPages, checkExternal,
+    });
     const siteWithUser = await db.getSiteById(site.id);
     registerSite({
       id: site.id,
       url: site.url,
       name: site.name,
-      ownerEmail: siteWithUser?.users?.email || '',
+      ownerEmail: siteWithUser?.users?.email || req.user.email,
       schedule: site.schedule,
       maxPages: site.max_pages,
       checkExternal: site.check_external,
@@ -137,22 +230,18 @@ router.post('/sites', requireAuth, async (req, res) => {
   }
 });
 
-router.get('/sites', requireAuth, async (req, res) => {
+router.get('/sites', requireUser, async (req, res) => {
   try {
-    const { userId } = req.query;
-    if (!userId) return err(res, 'userId query param required');
-    const sites = await db.getSitesByUser(userId);
+    const sites = await db.getSitesByUser(req.user.id);
     ok(res, { sites });
   } catch (e) {
     err(res, e.message);
   }
 });
 
-router.delete('/sites/:id', requireAuth, async (req, res) => {
+router.delete('/sites/:id', requireUser, async (req, res) => {
   try {
-    const { userId } = req.body;
-    if (!userId) return err(res, 'userId is required');
-    await db.deleteSite(req.params.id, userId);
+    await db.deleteSite(req.params.id, req.user.id);
     unregisterSite(req.params.id);
     ok(res, { removed: true });
   } catch (e) {
@@ -161,14 +250,40 @@ router.delete('/sites/:id', requireAuth, async (req, res) => {
 });
 
 // ── Scans ─────────────────────────────────────────────────────────────────────
-router.post('/scans', requireAuth, async (req, res) => {
-  const { url, siteId, maxPages = 50, checkExternal = true, email, siteName } = req.body;
+
+// Track in-progress ad-hoc scans (no siteId) to prevent duplication
+const activeAdHocScans = new Set();
+
+router.post('/scans', requireUser, scanLimiter, async (req, res) => {
+  if (req.user.subscription_status !== 'active') {
+    return err(res, 'Active subscription required', 403);
+  }
+
+  const { siteId, checkExternal = true, email, siteName } = req.body;
+  let { url } = req.body;
+
+  if (!url && siteId) {
+    // Fetch url from DB, verify ownership
+    const site = await db.getSiteById(siteId);
+    if (!site || site.user_id !== req.user.id) return err(res, 'Site not found', 404);
+    url = site.url;
+  }
   if (!url) return err(res, 'url is required');
   try { new URL(url); } catch { return err(res, 'Invalid URL'); }
+
+  // Enforce plan page limit
+  const plan = PLANS[req.user.plan];
+  const maxPages = plan ? plan.maxPages : 50;
+
+  // Prevent duplicate scans of same URL
+  if (activeAdHocScans.has(url)) {
+    return err(res, 'A scan is already in progress for this URL', 409);
+  }
 
   const scanId = crypto.randomUUID();
   ok(res, { scanId, message: 'Scan started', url }, 202);
 
+  activeAdHocScans.add(url);
   setImmediate(async () => {
     try {
       console.log(`[${scanId}] Starting on-demand scan: ${url}`);
@@ -184,12 +299,17 @@ router.post('/scans', requireAuth, async (req, res) => {
       }
     } catch (e) {
       console.error(`[${scanId}] Scan failed:`, e.message);
+    } finally {
+      activeAdHocScans.delete(url);
     }
   });
 });
 
-router.post('/scans/now/:siteId', requireAuth, async (req, res) => {
+router.post('/scans/now/:siteId', requireUser, scanLimiter, async (req, res) => {
   try {
+    // Verify the site belongs to this user
+    const site = await db.getSiteById(req.params.siteId);
+    if (!site || site.user_id !== req.user.id) return err(res, 'Site not found', 404);
     await scanNow(req.params.siteId);
     ok(res, { message: `Scan triggered for site ${req.params.siteId}` });
   } catch (e) {
@@ -197,9 +317,12 @@ router.post('/scans/now/:siteId', requireAuth, async (req, res) => {
   }
 });
 
-router.get('/scans/:siteId', requireAuth, async (req, res) => {
+router.get('/scans/:siteId', requireUser, async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 10;
+    // Verify ownership before returning scan history
+    const site = await db.getSiteById(req.params.siteId);
+    if (!site || site.user_id !== req.user.id) return err(res, 'Site not found', 404);
+    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
     const scans = await db.getScanHistory(req.params.siteId, limit);
     ok(res, { scans });
   } catch (e) {
@@ -207,11 +330,18 @@ router.get('/scans/:siteId', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/scans/quick', async (req, res) => {
+// Quick scan — authenticated, rate-limited
+router.post('/scans/quick', requireUser, scanLimiter, async (req, res) => {
   const { url } = req.body;
   if (!url) return err(res, 'url is required');
   try { new URL(url); } catch { return err(res, 'Invalid URL'); }
+
+  if (activeAdHocScans.has(url)) {
+    return err(res, 'A scan is already in progress for this URL', 409);
+  }
+
   try {
+    activeAdHocScans.add(url);
     const results = await crawl(url, 10, { checkExternal: false, quiet: true });
     ok(res, {
       url: results.startUrl,
@@ -222,6 +352,8 @@ router.post('/scans/quick', async (req, res) => {
     });
   } catch (e) {
     err(res, `Scan failed: ${e.message}`);
+  } finally {
+    activeAdHocScans.delete(url);
   }
 });
 
