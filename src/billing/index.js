@@ -87,6 +87,7 @@ async function createCheckoutSession({ customerId, plan, successUrl, cancelUrl, 
     cancel_url: cancelUrl,
     ...(clientReferenceId ? { client_reference_id: clientReferenceId } : {}),
     allow_promotion_codes: true,
+    metadata: { plan, source: 'snitchroot' },
     subscription_data: {
       metadata: { plan, source: 'snitchroot' },
     },
@@ -194,8 +195,10 @@ function handleWebhookEvent(event) {
     case 'customer.subscription.updated': {
       const plan = obj.metadata?.plan || null;
       const active = ['active', 'trialing'].includes(obj.status);
+      const dead = ['canceled', 'unpaid', 'incomplete_expired'].includes(obj.status);
       return {
-        type: active ? 'subscription.activated' : 'subscription.cancelled',
+        type: active ? 'subscription.activated' : dead ? 'subscription.cancelled' : 'ignored',
+        eventType: event.type,
         customerId: obj.customer,
         subscriptionId: obj.id,
         plan,

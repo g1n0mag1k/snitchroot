@@ -107,6 +107,7 @@ router.post('/billing/webhook', express.raw({ type: 'application/json' }), async
     }
   } catch (e) {
     console.error('DB error processing webhook:', e.message);
+    return res.status(500).json({ error: 'processing failed' });
   }
 
   res.json({ received: true });

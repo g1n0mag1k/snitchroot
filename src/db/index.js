@@ -48,9 +48,9 @@ async function upsertUser({ id, email, stripeCustomerId, stripeSubscriptionId, p
     email,
     stripe_customer_id: stripeCustomerId,
     stripe_subscription_id: stripeSubscriptionId,
-    plan,
     subscription_status: 'active',
   };
+  if (plan) row.plan = plan; // never overwrite a paid plan with null
   if (id) row.id = id;
 
   const { data, error } = await db()
@@ -73,10 +73,14 @@ async function cancelUser(stripeCustomerId) {
     .from('users')
     .update({ subscription_status: 'cancelled', plan: null })
     .eq('stripe_customer_id', stripeCustomerId)
-    .select()
-    .single();
+    .select();
 
-  return assert(data, error, 'cancelUser');
+  if (error) throw new Error(`cancelUser: ${error.message}`);
+  if (!data || data.length === 0) {
+    console.warn(`cancelUser: no user for customer ${stripeCustomerId}, nothing to do`);
+    return null;
+  }
+  return data[0];
 }
 
 /**
@@ -89,10 +93,14 @@ async function markPaymentFailed(stripeCustomerId) {
     .from('users')
     .update({ subscription_status: 'past_due' })
     .eq('stripe_customer_id', stripeCustomerId)
-    .select()
-    .single();
+    .select();
 
-  return assert(data, error, 'markPaymentFailed');
+  if (error) throw new Error(`markPaymentFailed: ${error.message}`);
+  if (!data || data.length === 0) {
+    console.warn(`markPaymentFailed: no user for customer ${stripeCustomerId}, nothing to do`);
+    return null;
+  }
+  return data[0];
 }
 
 /**
