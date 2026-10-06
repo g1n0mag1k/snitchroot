@@ -1,0 +1,27 @@
+{
+  "name": "snitchroot",
+  "version": "1.0.0",
+  "description": "SnitchRoot — catches what your website tries to hide. Automated broken link detection, dead page monitoring, and site health reports delivered to your inbox before Google finds them first.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/g1n0mag1k/snitchroot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/g1n0mag1k/snitchroot/issues"
+  },
+  "homepage": "https://github.com/g1n0mag1k/snitchroot#readme",
+  "dependencies": {
+    "axios": "^1.20.0",
+    "cheerio": "^1.2.0",
+    "express": "^5.2.1",
+    "stripe": "^23.0.0"
+  }
+}
