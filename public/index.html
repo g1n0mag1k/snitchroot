@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>SnitchRoot — Catches what your website tries to hide</title>
+  <meta name="description" content="Automated broken link detection and site health monitoring for freelancers and small SaaS founders. Tells on your website before Google does.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:      #0a0f1a;
+      --surface: #111827;
+      --border:  #1e2d40;
+      --accent:  #f59e0b;
+      --text:    #e2e8f0;
+      --muted:   #64748b;
+      --red:     #ef4444;
+      --green:   #22c55e;
+      --mono:    'IBM Plex Mono', monospace;
+
+      box-sizing: border-box;
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    *, *::before, *::after { box-sizing: inherit; margin: 0; padding: 0; }
+
+    html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+
+    body {
+      font-family: var(--mono);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Layout ── */
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ── Nav ── */
+    nav {
+      border-bottom: 1px solid var(--border);
+      padding: 16px 0;
+    }
+    nav .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.02em;
+    }
+    .logo span { color: var(--accent); }
+    nav ul {
+      list-style: none;
+      display: flex;
+      gap: 24px;
+    }
+    nav a {
+      color: var(--muted);
+      font-size: 13px;
+      transition: color 0.15s;
+    }
+    nav a:hover { color: var(--text); text-decoration: none; }
+
+    /* ── Hero ── */
+    .hero {
+      padding: 72px 0 56px;
+    }
+    .hero-eyebrow {
+      font-size: 12px;
+      color: var(--accent);
+      font-weight: 500;
+      margin-bottom: 20px;
+      letter-spacing: 0.04em;
+    }
+    .hero h1 {
+      font-size: clamp(28px, 4vw, 42px);
+      font-weight: 600;
+      line-height: 1.18;
+      letter-spacing: -0.03em;
+      color: var(--text);
+      max-width: 640px;
+      margin-bottom: 20px;
+    }
+    .hero h1 em {
+      font-style: normal;
+      color: var(--accent);
+    }
+    .hero-sub {
+      color: var(--muted);
+      font-size: 14px;
+      max-width: 520px;
+      margin-bottom: 40px;
+      line-height: 1.7;
+    }
+    .hero-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 500;
+      padding: 10px 22px;
+      border-radius: 4px;
+      cursor: pointer;
+      border: none;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #0a0f1a;
+    }
+    .btn-primary:hover { opacity: 0.88; text-decoration: none; color: #0a0f1a; }
+    .btn-ghost {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { color: var(--text); border-color: var(--muted); text-decoration: none; }
+
+    /* ── Terminal ── */
+    .terminal {
+      margin: 56px 0 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      font-size: 13px;
+    }
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 16px;
+      background: #0d1520;
+      border-bottom: 1px solid var(--border);
+    }
+    .terminal-bar .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+    }
+    .dot-red    { background: #ff5f57; }
+    .dot-yellow { background: #febc2e; }
+    .dot-green  { background: #28c840; }
+    .terminal-title {
+      margin-left: 8px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .terminal-body {
+      padding: 20px 24px;
+      line-height: 1.8;
+    }
+    .t-cmd  { color: var(--muted); }
+    .t-cmd::before { content: '$ '; color: var(--accent); }
+    .t-info { color: #7dd3fc; }
+    .t-ok   { color: var(--green); }
+    .t-warn { color: var(--accent); }
+    .t-err  { color: var(--red); }
+    .t-dim  { color: var(--muted); }
+    .t-url  { color: #a5b4fc; }
+    .t-blink::after {
+      content: '█';
+      color: var(--accent);
+      animation: blink 1.1s step-end infinite;
+    }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+    /* ── Section ── */
+    .section {
+      padding: 64px 0;
+      border-top: 1px solid var(--border);
+    }
+    .section-label {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      margin-bottom: 32px;
+    }
+    .section h2 {
+      font-size: clamp(20px, 3vw, 28px);
+      font-weight: 600;
+      letter-spacing: -0.025em;
+      margin-bottom: 16px;
+      max-width: 560px;
+    }
+    .section p {
+      color: var(--muted);
+      max-width: 560px;
+      margin-bottom: 32px;
+      line-height: 1.75;
+    }
+
+    /* ── Feature list ── */
+    .feature-list {
+      list-style: none;
+      display: grid;
+      gap: 20px;
+      margin-top: 32px;
+    }
+    .feature-list li {
+      display: grid;
+      grid-template-columns: 20px 1fr;
+      gap: 12px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--surface);
+    }
+    .feature-list li::before {
+      content: '›';
+      color: var(--accent);
+      font-size: 16px;
+      line-height: 1.6;
+    }
+    .feat-title {
+      font-weight: 500;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+    .feat-desc {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    /* ── Pricing ── */
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 32px;
+    }
+    @media (max-width: 600px) {
+      .pricing-grid { grid-template-columns: 1fr; }
+      nav ul { display: none; }
+    }
+    .plan {
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 28px 24px;
+      background: var(--surface);
+    }
+    .plan.featured {
+      border-color: var(--accent);
+    }
+    .plan-name {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 12px;
+      letter-spacing: 0.04em;
+    }
+    .plan-price {
+      font-size: 36px;
+      font-weight: 600;
+      letter-spacing: -0.04em;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+    .plan-price span {
+      font-size: 14px;
+      font-weight: 400;
+      color: var(--muted);
+    }
+    .plan-desc {
+      color: var(--muted);
+      font-size: 13px;
+      margin: 16px 0 20px;
+      line-height: 1.6;
+    }
+    .plan-features {
+      list-style: none;
+      margin-bottom: 28px;
+    }
+    .plan-features li {
+      font-size: 13px;
+      color: var(--muted);
+      padding: 5px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .plan-features li:last-child { border-bottom: none; }
+    .plan-features li::before { content: '— '; color: var(--border); }
+
+    /* ── Quick-scan widget ── */
+    .scan-widget {
+      margin-top: 32px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 24px;
+      background: var(--surface);
+    }
+    .scan-form {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .scan-form input {
+      flex: 1;
+      min-width: 240px;
+      font-family: var(--mono);
+      font-size: 13px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      padding: 10px 14px;
+      outline: none;
+    }
+    .scan-form input:focus { border-color: var(--accent); }
+    .scan-form input::placeholder { color: var(--muted); }
+    #scan-output {
+      margin-top: 16px;
+      font-size: 13px;
+      line-height: 1.8;
+      min-height: 0;
+    }
+    .scan-result-url {
+      color: var(--red);
+      display: block;
+      padding: 2px 0;
+    }
+    .scan-result-url::before { content: '🚨 '; }
+    .scan-ok { color: var(--green); }
+    .scan-err { color: var(--red); }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 0;
+    }
+    footer .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .footer-copy {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .footer-links {
+      display: flex;
+      gap: 20px;
+    }
+    .footer-links a {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .footer-links a:hover { color: var(--text); text-decoration: none; }
+
+    /* ── Roadmap ── */
+    .roadmap {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .roadmap li {
+      display: flex;
+      gap: 20px;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .roadmap li:last-child { border-bottom: none; }
+    .roadmap-status {
+      min-width: 80px;
+      font-size: 11px;
+    }
+    .status-live  { color: var(--green); }
+    .status-next  { color: var(--accent); }
+    .status-later { color: var(--muted); }
+    .roadmap-item { color: var(--muted); }
+    .roadmap-item strong { color: var(--text); font-weight: 500; display: block; margin-bottom: 2px; }
+  </style>
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav>
+    <div class="container">
+      <span class="logo">snitch<span>root</span></span>
+      <ul>
+        <li><a href="#features">features</a></li>
+        <li><a href="#pricing">pricing</a></li>
+        <li><a href="#roadmap">roadmap</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <p class="hero-eyebrow">broken link detection + site health monitoring</p>
+      <h1>Catches what your website<br><em>tries to hide</em></h1>
+      <p class="hero-sub">
+        SnitchRoot crawls your site on a schedule, finds broken links, dead pages, and unreachable assets, then sends a clean report to your inbox. Before Google finds them first.
+      </p>
+      <div class="hero-actions">
+        <a href="#pricing" class="btn btn-primary">get started — $19/mo</a>
+        <a href="#scan" class="btn btn-ghost">try a free scan</a>
+      </div>
+
+      <!-- Terminal demo -->
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="dot dot-red"></div>
+          <div class="dot dot-yellow"></div>
+          <div class="dot dot-green"></div>
+          <span class="terminal-title">snitchroot — weekly scan report</span>
+        </div>
+        <div class="terminal-body">
+          <div class="t-cmd">snitchroot scan https://yourstartup.com --max-pages 100</div>
+          <div class="t-info">🕵️  starting crawl on https://yourstartup.com</div>
+          <div class="t-dim">checking: /about, /pricing, /docs, /blog ...</div>
+          <div class="t-dim">checking: /blog/2023-q2-update, /changelog, /careers ...</div>
+          <div class="t-dim">checking 47 external links ...</div>
+          <div>&nbsp;</div>
+          <div class="t-err">🚨 BROKEN: /blog/2023-q2-update  →  404</div>
+          <div class="t-err">🚨 BROKEN (external): https://old-partner.com/deal  →  UNREACHABLE</div>
+          <div class="t-warn">🚨 BROKEN: /docs/api/v1/webhooks  →  410</div>
+          <div>&nbsp;</div>
+          <div class="t-ok">✅ done. checked 214 URLs in 43s. found 3 broken links.</div>
+          <div class="t-dim">📤 report sent to hello@yourstartup.com<span class="t-blink"></span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="section" id="features">
+    <div class="container">
+      <p class="section-label">what it does</p>
+      <h2>Everything a 404 doesn't tell you</h2>
+      <p>
+        Broken links don't announce themselves. They sit in old blog posts, resource pages, and navigation menus until a real user — or a search crawler — stumbles into them.
+      </p>
+
+      <ul class="feature-list">
+        <li>
+          <div>
+            <div class="feat-title">Full-site crawl</div>
+            <div class="feat-desc">Follows internal links up to your configured page limit. Normalizes URLs, skips fragments and trailing slashes, handles redirects. Finds what you'd miss in a manual check.</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="feat-title">External link verification</div>
+            <div class="feat-desc">Every outbound link is checked too. Partner pages go dark. Blog posts link to content that moves. SnitchRoot catches all of it — not just your own 404s.</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="feat-title">Scheduled weekly reports</div>
+            <div class="feat-desc">Set it once. Every Monday you get an email listing every broken link grouped by the page it was found on — so you know exactly where to go fix it.</div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <div class="feat-title">On-demand scans</div>
+            <div class="feat-desc">Pushed a big update? Ran a migration? Trigger a scan immediately from the dashboard. Don't wait until Monday to find out what broke.</div>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Free scan -->
+  <section class="section" id="scan">
+    <div class="container">
+      <p class="section-label">try it now</p>
+      <h2>Run a free scan</h2>
+      <p>
+        Enter your URL and we'll check up to 10 pages for broken links right now, no account required.
+      </p>
+
+      <div class="scan-widget">
+        <div class="scan-form">
+          <input type="url" id="scan-url" placeholder="https://yourdomain.com" autocomplete="off" spellcheck="false">
+          <button class="btn btn-primary" onclick="runScan()">scan it</button>
+        </div>
+        <div id="scan-output"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pricing -->
+  <section class="section" id="pricing">
+    <div class="container">
+      <p class="section-label">pricing</p>
+      <h2>Straightforward. No seat fees.</h2>
+      <p>
+        One price per plan, paid monthly. Cancel any time from your billing portal — no email required, no waiting period.
+      </p>
+
+      <div class="pricing-grid">
+        <div class="plan">
+          <div class="plan-name">PRO</div>
+          <div class="plan-price">$19<span>/month</span></div>
+          <p class="plan-desc">For freelancers and founders managing a handful of sites.</p>
+          <ul class="plan-features">
+            <li>up to 5 sites</li>
+            <li>200 pages per crawl</li>
+            <li>weekly scheduled scans</li>
+            <li>external link checking</li>
+            <li>email reports</li>
+            <li>on-demand scans</li>
+          </ul>
+          <a href="#" class="btn btn-ghost" onclick="checkout('pro'); return false;">start with Pro</a>
+        </div>
+
+        <div class="plan featured">
+          <div class="plan-name">AGENCY</div>
+          <div class="plan-price">$49<span>/month</span></div>
+          <p class="plan-desc">For agencies and teams running client sites at scale.</p>
+          <ul class="plan-features">
+            <li>up to 25 sites</li>
+            <li>500 pages per crawl</li>
+            <li>weekly scheduled scans</li>
+            <li>external link checking</li>
+            <li>email reports per site</li>
+            <li>on-demand scans</li>
+          </ul>
+          <a href="#" class="btn btn-primary" onclick="checkout('agency'); return false;">start with Agency</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Roadmap -->
+  <section class="section" id="roadmap">
+    <div class="container">
+      <p class="section-label">roadmap</p>
+      <h2>What's coming</h2>
+      <p>
+        SnitchRoot starts with broken links because that's the most common silent failure. The next problems are just as invisible.
+      </p>
+
+      <ul class="roadmap">
+        <li>
+          <span class="roadmap-status status-live">live now</span>
+          <div class="roadmap-item">
+            <strong>Broken link detection</strong>
+            Full-site crawl, external link verification, scheduled reports.
+          </div>
+        </li>
+        <li>
+          <span class="roadmap-status status-next">next</span>
+          <div class="roadmap-item">
+            <strong>Competitor monitoring</strong>
+            Track changes to competitor pages — pricing, features, copy — and get notified when something moves.
+          </div>
+        </li>
+        <li>
+          <span class="roadmap-status status-next">next</span>
+          <div class="roadmap-item">
+            <strong>Uptime monitoring</strong>
+            Lightweight ping-based checks with alerting. Catch downtime before your users do.
+          </div>
+        </li>
+        <li>
+          <span class="roadmap-status status-later">later</span>
+          <div class="roadmap-item">
+            <strong>API &amp; integration health</strong>
+            Monitor the third-party APIs your product depends on. Know about Stripe, SendGrid, or GitHub incidents before they become your support tickets.
+          </div>
+        </li>
+        <li>
+          <span class="roadmap-status status-later">later</span>
+          <div class="roadmap-item">
+            <strong>SaaS spend tracking</strong>
+            One view of every subscription your team is paying for — with usage signals to flag the ones nobody is using.
+          </div>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <span class="footer-copy">© 2025 SnitchRoot. Tells on your website before Google does.</span>
+      <div class="footer-links">
+        <a href="mailto:hello@snitchroot.com">contact</a>
+        <a href="/privacy">privacy</a>
+        <a href="/terms">terms</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // ── Quick scan widget ──────────────────────────────────────────────────────
+    async function runScan() {
+      const urlInput = document.getElementById('scan-url');
+      const output = document.getElementById('scan-output');
+      const url = urlInput.value.trim();
+
+      if (!url) {
+        output.innerHTML = '<span class="scan-err">enter a URL to scan</span>';
+        return;
+      }
+
+      let normalizedUrl = url;
+      if (!/^https?:\/\//i.test(normalizedUrl)) {
+        normalizedUrl = 'https://' + normalizedUrl;
+      }
+
+      output.innerHTML = '<span class="t-dim">🕵️ scanning... this may take 15–30 seconds</span>';
+
+      try {
+        const res = await fetch('/api/scans/quick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: normalizedUrl }),
+        });
+
+        const data = await res.json();
+
+        if (!data.ok) {
+          output.innerHTML = `<span class="scan-err">error: ${data.error}</span>`;
+          return;
+        }
+
+        const { checked, pagesCrawled, broken } = data;
+
+        if (broken.length === 0) {
+          output.innerHTML = `
+            <span class="scan-ok">✅ all clear — checked ${checked} URLs across ${pagesCrawled} pages. no broken links found.</span>
+            <br><br>
+            <a href="#pricing" class="btn btn-primary" style="display:inline-block;margin-top:4px;">set up weekly monitoring</a>
+          `;
+        } else {
+          const brokenLines = broken.map(b =>
+            `<span class="scan-result-url">${b.url}  →  ${b.status}</span>`
+          ).join('');
+
+          output.innerHTML = `
+            <span class="t-warn">found ${broken.length} broken link${broken.length !== 1 ? 's' : ''} across ${pagesCrawled} pages:</span><br><br>
+            ${brokenLines}
+            <br>
+            <a href="#pricing" class="btn btn-primary" style="display:inline-block;margin-top:12px;">monitor this site weekly</a>
+          `;
+        }
+      } catch (e) {
+        output.innerHTML = `<span class="scan-err">scan failed — ${e.message}</span>`;
+      }
+    }
+
+    // Allow Enter key to trigger scan
+    document.getElementById('scan-url').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') runScan();
+    });
+
+    // ── Checkout ──────────────────────────────────────────────────────────────
+    async function checkout(plan) {
+      const email = window.prompt('Enter your email to get started:');
+      if (!email || !email.includes('@')) return;
+
+      try {
+        const res = await fetch('/api/billing/checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, plan }),
+        });
+        const data = await res.json();
+        if (data.url) {
+          window.location.href = data.url;
+        } else {
+          alert('Something went wrong. Try again or email hello@snitchroot.com');
+        }
+      } catch (e) {
+        alert('Could not connect to checkout. ' + e.message);
+      }
+    }
+  </script>
+</body>
+</html>

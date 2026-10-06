@@ -10,14 +10,17 @@ async function runSiteScan(site) {
     console.log(`⏭  Skipping ${site.name} — previous scan still in progress`);
     return;
   }
+
   site.running = true;
   site.lastRunAt = new Date();
   console.log(`🔍 Starting scheduled scan: ${site.name} (${site.url})`);
+
   try {
     const results = await crawl(site.url, site.maxPages ?? 100, {
       checkExternal: site.checkExternal ?? true,
       quiet: false,
     });
+
     try {
       const db = require('../db');
       await db.saveScan(site.id, results);
@@ -25,12 +28,14 @@ async function runSiteScan(site) {
     } catch (dbErr) {
       console.warn(`⚠️  Could not save scan to DB: ${dbErr.message}`);
     }
+
     await sendReport({
       to: site.ownerEmail,
       siteName: site.name,
       siteUrl: site.url,
       results,
     });
+
     console.log(`📤 Report sent for ${site.name} — ${results.broken.length} broken link(s)`);
   } catch (err) {
     console.error(`❌ Scan failed for ${site.name}:`, err.message);
@@ -41,15 +46,21 @@ async function runSiteScan(site) {
 
 function registerSite(site) {
   const schedule = site.schedule || '0 8 * * 1';
+
   if (!cron.validate(schedule)) {
     throw new Error(`Invalid cron expression for site ${site.id}: "${schedule}"`);
   }
-  if (jobs.has(site.id)) unregisterSite(site.id);
+
+  if (jobs.has(site.id)) {
+    unregisterSite(site.id);
+  }
+
   const entry = { ...site, running: false, lastRunAt: null, schedule };
   const task = cron.schedule(schedule, () => runSiteScan(entry), {
     scheduled: true,
     timezone: process.env.TZ || 'UTC',
   });
+
   jobs.set(site.id, { site: entry, task });
   console.log(`📅 Registered ${site.name} → "${schedule}" (${site.url})`);
   return { id: site.id, schedule };
@@ -72,8 +83,13 @@ async function scanNow(id) {
 
 function listJobs() {
   return [...jobs.entries()].map(([id, { site }]) => ({
-    id, name: site.name, url: site.url, schedule: site.schedule,
-    ownerEmail: site.ownerEmail, running: site.running, lastRunAt: site.lastRunAt,
+    id,
+    name: site.name,
+    url: site.url,
+    schedule: site.schedule,
+    ownerEmail: site.ownerEmail,
+    running: site.running,
+    lastRunAt: site.lastRunAt,
   }));
 }
 
@@ -81,10 +97,12 @@ async function loadSitesFromDB() {
   try {
     const db = require('../db');
     const sites = await db.getAllActiveSites();
+
     if (sites.length === 0) {
       console.log('📭 No active sites in DB to schedule');
       return;
     }
+
     for (const site of sites) {
       registerSite({
         id: site.id,
@@ -96,6 +114,7 @@ async function loadSitesFromDB() {
         checkExternal: site.check_external,
       });
     }
+
     console.log(`📅 Loaded ${sites.length} site(s) from DB into scheduler`);
   } catch (err) {
     console.error('❌ Failed to load sites from DB:', err.message);

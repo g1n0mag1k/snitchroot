@@ -4,7 +4,8 @@
   "description": "SnitchRoot — catches what your website tries to hide. Automated broken link detection, dead page monitoring, and site health reports delivered to your inbox before Google finds them first.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node index.js"
   },
   "repository": {
     "type": "git",
@@ -19,6 +20,7 @@
   },
   "homepage": "https://github.com/g1n0mag1k/snitchroot#readme",
   "dependencies": {
+    "@supabase/supabase-js": "^2.117.2",
     "axios": "^1.20.0",
     "cheerio": "^1.2.0",
     "dotenv": "^18.0.5",
@@ -26,5 +28,8 @@
     "node-cron": "^4.6.0",
     "nodemailer": "^10.0.15",
     "stripe": "^23.0.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
