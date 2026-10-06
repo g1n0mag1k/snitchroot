@@ -85,7 +85,7 @@ async function createCheckoutSession({ customerId, plan, successUrl, cancelUrl, 
     line_items: [{ price: priceId, quantity: 1 }],
     success_url: successUrl,
     cancel_url: cancelUrl,
-    client_reference_id: clientReferenceId || null,
+    ...(clientReferenceId ? { client_reference_id: clientReferenceId } : {}),
     allow_promotion_codes: true,
     subscription_data: {
       metadata: { plan, source: 'snitchroot' },
